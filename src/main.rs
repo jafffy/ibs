@@ -32,6 +32,23 @@ enum Commands {
         #[arg(short, long)]
         scheme: Option<String>,
     },
+    /// Deploy the iOS project to a device or simulator
+    Deploy {
+        /// Target to deploy to (device/simulator)
+        target: String,
+        /// Simulator ID (required for simulator deployment)
+        #[arg(long)]
+        simulator_id: Option<String>,
+        /// Build configuration (Debug/Release)
+        #[arg(default_value = "Debug")]
+        configuration: String,
+        /// Development Team ID
+        #[arg(short, long)]
+        team_id: Option<String>,
+        /// Project scheme name (defaults to project name)
+        #[arg(short, long)]
+        scheme: Option<String>,
+    },
 }
 
 fn run_command(command: &str, args: &[&str]) -> Result<()> {
@@ -343,6 +360,143 @@ fn build_project(configuration: &str, team_id: Option<&str>, scheme: Option<&str
     Ok(())
 }
 
+fn deploy_project(
+    target: &str,
+    simulator_id: Option<&str>,
+    configuration: &str,
+    team_id: Option<&str>,
+    scheme: Option<&str>,
+) -> Result<()> {
+    // Find Xcode project and change to its directory
+    let (default_scheme, project_dir) = find_xcode_project()?;
+    std::env::set_current_dir(&project_dir)?;
+
+    // Create and prepare intermediate directories
+    println!("{} Creating build directories...", "→".blue());
+    fs::create_dir_all("intermediate/logs")?;
+    fs::create_dir_all("intermediate/build")?;
+    
+    // Mark the build directory as deletable by Xcode's build system
+    run_command("xattr", &["-w", "com.apple.xcode.CreatedByBuildSystem", "true", "intermediate/build"])?;
+
+    // Use provided scheme or default to found project name
+    let scheme_name = scheme.unwrap_or(&default_scheme);
+
+    match target {
+        "device" => {
+            println!("{} Building and deploying to iOS device...", "→".blue());
+            println!("Configuration: {}", configuration);
+            println!("Scheme: {}", scheme_name);
+            if let Some(team) = team_id {
+                println!("Team ID: {}", team);
+            }
+
+            // Store all string arguments in a vector to ensure they live long enough
+            let mut args = vec![
+                "build".to_string(),
+                "-scheme".to_string(),
+                scheme_name.to_string(),
+                "-configuration".to_string(),
+                configuration.to_string(),
+                "-sdk".to_string(),
+                "iphoneos".to_string(),
+                "-allowProvisioningUpdates".to_string(),
+                "CONFIGURATION_BUILD_DIR=intermediate/build".to_string(),
+                "ONLY_ACTIVE_ARCH=NO".to_string(),
+            ];
+
+            // Add team ID if provided
+            if let Some(team) = team_id {
+                args.push(format!("DEVELOPMENT_TEAM={}", team));
+                args.push("CODE_SIGN_STYLE=Automatic".to_string());
+            }
+
+            // Convert string references to str references
+            let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_command("xcodebuild", &args_refs)?;
+
+            // Find the .app file
+            let app_name = scheme_name;
+            let app_path = format!("intermediate/build/{}.app", app_name);
+
+            // Try to mount the developer disk image first
+            println!("\n{} Mounting developer disk image...", "→".blue());
+            if let Err(e) = run_command("xcrun", &["xcodebuild", "-runFirstLaunch"]) {
+                println!("{} Failed to mount developer disk image: {}", "Warning:".yellow(), e);
+                println!("You might need to:");
+                println!("1. Open Xcode");
+                println!("2. Connect your device");
+                println!("3. Trust the developer certificate");
+                println!("4. Let Xcode install the necessary support files");
+            }
+
+            // Install the app on the device
+            println!("\n{} Installing app on device...", "→".blue());
+            run_command("ios-deploy", &["--bundle", &app_path])?;
+            println!("\n{} App installed successfully!", "Success:".green());
+            println!("You can now launch the app from your device.");
+        }
+        "simulator" => {
+            let simulator_id = simulator_id.context("Simulator ID is required for simulator deployment")?;
+            
+            println!("{} Building and deploying to iOS simulator...", "→".blue());
+            println!("Configuration: {}", configuration);
+            println!("Scheme: {}", scheme_name);
+            println!("Simulator ID: {}", simulator_id);
+
+            // Create the destination string once and store it
+            let destination = format!("id={}", simulator_id);
+
+            // Store all string arguments in a vector to ensure they live long enough
+            let mut args = vec![
+                "build".to_string(),
+                "-scheme".to_string(),
+                scheme_name.to_string(),
+                "-configuration".to_string(),
+                configuration.to_string(),
+                "-sdk".to_string(),
+                "iphonesimulator".to_string(),
+                "-destination".to_string(),
+                destination,
+                "CONFIGURATION_BUILD_DIR=intermediate/build".to_string(),
+            ];
+
+            // Add team ID if provided
+            if let Some(team) = team_id {
+                args.push(format!("DEVELOPMENT_TEAM={}", team));
+                args.push("CODE_SIGN_STYLE=Automatic".to_string());
+            }
+
+            // Convert string references to str references
+            let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            run_command("xcodebuild", &args_refs)?;
+
+            // Find the .app file
+            let app_name = scheme_name;
+            let app_path = format!("intermediate/build/{}.app", app_name);
+
+            // Boot the simulator if it's not running
+            println!("\n{} Booting simulator...", "→".blue());
+            run_command("xcrun", &["simctl", "boot", simulator_id])?;
+
+            // Install and launch the app
+            println!("\n{} Installing app to simulator...", "→".blue());
+            run_command("xcrun", &["simctl", "install", simulator_id, &app_path])?;
+
+            // Get bundle identifier from Info.plist
+            let bundle_id = format!("com.example.{}", app_name); // This should match your project.yml template
+            println!("\n{} Launching app...", "→".blue());
+            run_command("xcrun", &["simctl", "launch", simulator_id, &bundle_id])?;
+        }
+        _ => {
+            anyhow::bail!("Invalid deployment target. Use 'device' or 'simulator'");
+        }
+    }
+
+    println!("\n{} Deployment completed successfully!", "Success:".green());
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -352,6 +506,9 @@ fn main() -> Result<()> {
         }
         Commands::Build { configuration, team_id, scheme } => {
             build_project(&configuration, team_id.as_deref(), scheme.as_deref())?;
+        }
+        Commands::Deploy { target, simulator_id, configuration, team_id, scheme } => {
+            deploy_project(&target, simulator_id.as_deref(), &configuration, team_id.as_deref(), scheme.as_deref())?;
         }
     }
 

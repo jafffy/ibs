@@ -1,52 +1,71 @@
-# IBS (iOS Build System)
+# iOS Build System (ibs)
 
-A command-line tool for iOS project management, written in Rust.
+A command-line tool for iOS project management, building, and deployment.
 
-## Requirements
+## Prerequisites
 
-- Rust 1.75 or higher
-- Cargo (Rust's package manager)
+- macOS with Xcode installed
+- iOS device or simulator for testing
+- `ios-deploy` tool (install via `brew install ios-deploy`)
 
 ## Installation
 
-Clone the repository and build from source:
-
 ```bash
-git clone https://github.com/yourusername/ibs.git
-cd ibs
 cargo install --path .
 ```
 
-## Features
-
-- iOS project management from command line
-- Project templating and generation
-- Build system integration
-
 ## Usage
 
-```bash
-ibs --help
-```
-
-## Development
-
-To build the project locally:
+### Create a new iOS project
 
 ```bash
-cargo build
+ibs setup PROJECT_NAME --team-id YOUR_TEAM_ID
 ```
 
-For development build:
+### Build the project
+
 ```bash
-cargo run -- [arguments]
+ibs build --team-id YOUR_TEAM_ID
 ```
 
-For release build:
+### Deploy to Device
+
 ```bash
-cargo build --release
+ibs deploy device --team-id YOUR_TEAM_ID
 ```
 
-## License
+### Deploy to Simulator
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+First, list available simulators:
+```bash
+xcrun simctl list devices
+```
+
+Then deploy to a specific simulator:
+```bash
+ibs deploy simulator --simulator-id SIMULATOR_ID
+```
+
+## TODO
+
+### App Execution
+- [ ] Add direct app launch functionality for iOS devices
+- [ ] Support debugging on device
+- [ ] Add logging and crash reporting
+- [ ] Support background app launch
+- [ ] Add app state monitoring
+
+### Known Limitations
+1. App execution on device:
+   - Currently, the tool only installs the app on the device
+   - You need to manually launch the app from your device
+   - Future versions will support direct app launch and debugging
+
+2. Device deployment:
+   - Make sure your device is connected and trusted
+   - You may need to open Xcode and let it install device support files
+   - Trust the developer certificate on your device (Settings → General → Device Management)
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. 
